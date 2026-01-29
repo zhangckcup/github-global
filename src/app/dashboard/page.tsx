@@ -216,7 +216,7 @@ export default function DashboardPage() {
                   value={repoUrl}
                   onChange={(e) => setRepoUrl(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleImport()}
-                  className="flex-1"
+                  className="flex-1 placeholder:text-gray-400"
                 />
                 <Button 
                   onClick={handleImport} 

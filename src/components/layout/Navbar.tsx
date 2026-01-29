@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { Button } from "@/components/ui/button";
-import { Globe, Menu, X, LogOut, Settings, LayoutDashboard, User } from "lucide-react";
+import { Globe, Menu, X, LogOut, Settings, LayoutDashboard, User, Loader2 } from "lucide-react";
 
 interface NavbarProps {
   user?: {
@@ -14,27 +14,16 @@ interface NavbarProps {
 }
 
 export function Navbar({ user }: NavbarProps) {
-  const router = useRouter();
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
 
   const handleLogout = async () => {
     try {
       setIsLoggingOut(true);
-      const response = await fetch('/api/auth/signout', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-      });
-      
-      if (response.ok) {
-        router.push('/');
-        router.refresh();
-      }
+      // 使用 NextAuth 的 signOut 函数，会自动清除 session 并刷新页面
+      await signOut({ callbackUrl: '/' });
     } catch (error) {
       console.error('Logout error:', error);
-    } finally {
       setIsLoggingOut(false);
     }
   };
