@@ -107,7 +107,7 @@ export default function LoginPage() {
             <Button
               onClick={handleLogin}
               disabled={isLoading}
-              className="w-full"
+              className="w-full bg-black hover:bg-gray-800 text-white rounded-full"
               size="lg"
             >
               {isLoading ? (

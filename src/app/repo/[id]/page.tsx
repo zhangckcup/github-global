@@ -74,9 +74,12 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
   }, [sessionStatus, router]);
 
   // 加载仓库详情
-  const fetchRepo = async () => {
+  const fetchRepo = async (showLoading = true) => {
     try {
-      setIsLoading(true);
+      // 只有初始加载时才显示加载状态，轮询刷新时不显示
+      if (showLoading) {
+        setIsLoading(true);
+      }
       setError(null);
       const response = await fetch(`/api/repos/${id}`);
       
@@ -98,9 +101,14 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
       setRepo(data.repository);
     } catch (err: any) {
       console.error('Fetch repo error:', err);
-      setError(err.message || '加载仓库详情失败');
+      // 轮询时出错不显示错误，避免干扰用户
+      if (showLoading) {
+        setError(err.message || '加载仓库详情失败');
+      }
     } finally {
-      setIsLoading(false);
+      if (showLoading) {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -110,12 +118,12 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
     }
   }, [id, sessionStatus]);
 
-  // 自动刷新运行中的任务
+  // 自动刷新运行中的任务（静默刷新，不显示加载状态）
   useEffect(() => {
     const hasRunningTask = repo?.translationTasks?.some(t => t.status === 'RUNNING');
     
     if (hasRunningTask) {
-      const interval = setInterval(fetchRepo, 5000); // 每5秒刷新
+      const interval = setInterval(() => fetchRepo(false), 5000); // 每5秒静默刷新
       return () => clearInterval(interval);
     }
   }, [repo?.translationTasks]);
@@ -255,7 +263,7 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
               <h3 className="text-lg font-semibold mb-2">加载失败</h3>
               <p className="text-muted-foreground mb-4">{error || '仓库不存在'}</p>
               <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                <Button onClick={fetchRepo} variant="outline">
+                <Button onClick={() => fetchRepo()} variant="outline">
                   <RefreshCw className="mr-2 h-4 w-4" />
                   重试
                 </Button>
@@ -381,7 +389,7 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
             <div className="flex items-center justify-between">
               <h2 className="text-xl md:text-2xl font-bold">翻译任务</h2>
               {tasks.length > 0 && (
-                <Button variant="ghost" size="sm" onClick={fetchRepo}>
+                <Button variant="ghost" size="sm" onClick={() => fetchRepo()}>
                   <RefreshCw className="mr-2 h-4 w-4" />
                   刷新
                 </Button>
