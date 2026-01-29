@@ -38,25 +38,23 @@ export async function getFileTree(
   });
 
   const items = Array.isArray(data) ? data : [data];
-  const result: FileTreeNode[] = [];
-
-  // 保持 GitHub API 返回的原始顺序，不进行排序
-  for (const item of items) {
+  
+  // 按原始顺序处理所有项目，使用 Promise.all 保持顺序
+  const nodePromises = items.map(async (item): Promise<FileTreeNode | null> => {
     const isMarkdown = item.name.endsWith('.md') || item.name.endsWith('.mdx');
     
     if (item.type === 'file') {
       // 如果启用了 markdownOnly 模式，只保留 Markdown 文件
       if (markdownOnly && !isMarkdown) {
-        continue;
+        return null;
       }
       
-      const node: FileTreeNode = {
+      return {
         name: item.name,
         path: item.path,
         type: 'file',
         isMarkdown,
       };
-      result.push(node);
     } else if (item.type === 'dir' && !SKIP_DIRECTORIES.includes(item.name)) {
       // 递归获取子目录
       try {
@@ -64,23 +62,27 @@ export async function getFileTree(
         
         // 如果启用了 markdownOnly 模式，只保留包含 Markdown 文件的目录
         if (markdownOnly && children.length === 0) {
-          continue;
+          return null;
         }
         
-        const node: FileTreeNode = {
+        return {
           name: item.name,
           path: item.path,
           type: 'dir',
           children,
         };
-        result.push(node);
       } catch (error) {
         console.error(`Error fetching directory ${item.path}:`, error);
+        return null;
       }
     }
-  }
+    
+    return null;
+  });
 
-  return result;
+  // 等待所有处理完成，然后过滤掉 null 值
+  const nodes = await Promise.all(nodePromises);
+  return nodes.filter((node): node is FileTreeNode => node !== null);
 }
 
 /**
