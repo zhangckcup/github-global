@@ -39,11 +39,37 @@ export async function getFileTree(
 
   const items = Array.isArray(data) ? data : [data];
   
-  // 按原始顺序处理所有项目，使用 Promise.all 保持顺序
-  const nodePromises = items.map(async (item): Promise<FileTreeNode | null> => {
-    const isMarkdown = item.name.endsWith('.md') || item.name.endsWith('.mdx');
-    
-    if (item.type === 'file') {
+  // 分离目录和文件
+  const dirItems = items.filter(item => item.type === 'dir' && !SKIP_DIRECTORIES.includes(item.name));
+  const fileItems = items.filter(item => item.type === 'file');
+  
+  // 处理目录（并行获取子内容）
+  const dirPromises = dirItems.map(async (item): Promise<FileTreeNode | null> => {
+    try {
+      const children = await getFileTree(octokit, owner, repo, item.path, markdownOnly);
+      
+      // 如果启用了 markdownOnly 模式，只保留包含 Markdown 文件的目录
+      if (markdownOnly && children.length === 0) {
+        return null;
+      }
+      
+      return {
+        name: item.name,
+        path: item.path,
+        type: 'dir',
+        children,
+      };
+    } catch (error) {
+      console.error(`Error fetching directory ${item.path}:`, error);
+      return null;
+    }
+  });
+  
+  // 处理文件
+  const fileNodes: FileTreeNode[] = fileItems
+    .map((item): FileTreeNode | null => {
+      const isMarkdown = item.name.endsWith('.md') || item.name.endsWith('.mdx');
+      
       // 如果启用了 markdownOnly 模式，只保留 Markdown 文件
       if (markdownOnly && !isMarkdown) {
         return null;
@@ -55,34 +81,18 @@ export async function getFileTree(
         type: 'file',
         isMarkdown,
       };
-    } else if (item.type === 'dir' && !SKIP_DIRECTORIES.includes(item.name)) {
-      // 递归获取子目录
-      try {
-        const children = await getFileTree(octokit, owner, repo, item.path, markdownOnly);
-        
-        // 如果启用了 markdownOnly 模式，只保留包含 Markdown 文件的目录
-        if (markdownOnly && children.length === 0) {
-          return null;
-        }
-        
-        return {
-          name: item.name,
-          path: item.path,
-          type: 'dir',
-          children,
-        };
-      } catch (error) {
-        console.error(`Error fetching directory ${item.path}:`, error);
-        return null;
-      }
-    }
-    
-    return null;
-  });
+    })
+    .filter((node): node is FileTreeNode => node !== null);
 
-  // 等待所有处理完成，然后过滤掉 null 值
-  const nodes = await Promise.all(nodePromises);
-  return nodes.filter((node): node is FileTreeNode => node !== null);
+  // 等待目录处理完成
+  const dirNodes = (await Promise.all(dirPromises))
+    .filter((node): node is FileTreeNode => node !== null);
+  
+  // 按 GitHub 风格排序：目录在前（按名称排序），文件在后（按名称排序）
+  const sortedDirs = dirNodes.sort((a, b) => a.name.localeCompare(b.name));
+  const sortedFiles = fileNodes.sort((a, b) => a.name.localeCompare(b.name));
+  
+  return [...sortedDirs, ...sortedFiles];
 }
 
 /**
