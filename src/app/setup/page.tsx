@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Navbar, Footer } from "@/components/layout";
-import { Globe, CheckCircle2, AlertCircle, Loader2, ExternalLink } from "lucide-react";
+import { CheckCircle2, AlertCircle, Loader2, ExternalLink, RefreshCw } from "lucide-react";
 
 export default function SetupPage() {
   const { data: session, status: sessionStatus } = useSession();
@@ -16,9 +16,36 @@ export default function SetupPage() {
   const [error, setError] = useState<string | null>(null);
   const [installUrl, setInstallUrl] = useState<string>('');
   const [isLoadingUrl, setIsLoadingUrl] = useState(true);
-  const [autoRedirecting, setAutoRedirecting] = useState(false);
+  
+  // 新窗口打开和轮询相关状态
+  const [isWaitingForInstall, setIsWaitingForInstall] = useState(false);
+  const [pollCount, setPollCount] = useState(0);
+  const [hasAutoOpened, setHasAutoOpened] = useState(false); // 防止重复自动打开
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const installWindowRef = useRef<Window | null>(null);
 
-  // 检查是否已安装 GitHub App
+  // 检查是否已安装 GitHub App（静默模式，不显示加载状态）
+  const checkInstallationSilent = useCallback(async (): Promise<boolean> => {
+    try {
+      const response = await fetch('/api/github/installations');
+      
+      if (!response.ok) {
+        if (response.status === 401) {
+          router.push('/login');
+          return false;
+        }
+        return false;
+      }
+
+      const data = await response.json();
+      return data.totalCount > 0;
+    } catch (err) {
+      console.error('Check installation error:', err);
+      return false;
+    }
+  }, [router]);
+
+  // 检查是否已安装 GitHub App（带加载状态）
   const checkInstallation = useCallback(async () => {
     try {
       setIsChecking(true);
@@ -38,6 +65,8 @@ export default function SetupPage() {
       
       if (data.totalCount > 0) {
         setHasInstallation(true);
+        // 停止轮询
+        stopPolling();
         // 安装成功，跳转到控制台
         setTimeout(() => {
           router.push('/dashboard');
@@ -53,7 +82,80 @@ export default function SetupPage() {
     }
   }, [router]);
 
-  // 获取安装 URL 并自动跳转
+  // 停止轮询
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    setIsWaitingForInstall(false);
+    setPollCount(0);
+  }, []);
+
+  // 开始轮询检查安装状态
+  const startPolling = useCallback(() => {
+    // 如果已经在轮询，先停止
+    stopPolling();
+    
+    setIsWaitingForInstall(true);
+    setPollCount(0);
+
+    // 每 3 秒检查一次安装状态
+    pollIntervalRef.current = setInterval(async () => {
+      setPollCount(prev => prev + 1);
+      
+      const installed = await checkInstallationSilent();
+      
+      if (installed) {
+        // 安装成功！
+        stopPolling();
+        setHasInstallation(true);
+        
+        // 尝试关闭安装窗口（可能因为跨域被阻止）
+        try {
+          if (installWindowRef.current && !installWindowRef.current.closed) {
+            installWindowRef.current.close();
+          }
+        } catch (e) {
+          // 忽略跨域错误
+        }
+        
+        // 跳转到控制台
+        setTimeout(() => {
+          router.push('/dashboard');
+        }, 1500);
+      }
+    }, 3000);
+
+    // 最多轮询 2 分钟（40 次）
+    setTimeout(() => {
+      if (pollIntervalRef.current) {
+        stopPolling();
+      }
+    }, 120000);
+  }, [checkInstallationSilent, stopPolling, router]);
+
+  // 在新窗口打开 GitHub App 安装页面
+  const openInstallWindow = useCallback(() => {
+    if (!installUrl) return;
+
+    // 在新窗口打开 GitHub App 安装页面
+    const width = 1000;
+    const height = 700;
+    const left = (window.screen.width - width) / 2;
+    const top = (window.screen.height - height) / 2;
+    
+    installWindowRef.current = window.open(
+      installUrl,
+      'github-app-install',
+      `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=yes,status=no`
+    );
+
+    // 开始轮询检查安装状态
+    startPolling();
+  }, [installUrl, startPolling]);
+
+  // 获取安装 URL
   useEffect(() => {
     const fetchInstallUrl = async () => {
       try {
@@ -76,7 +178,7 @@ export default function SetupPage() {
     fetchInstallUrl();
   }, []);
 
-  // 检查 URL 中是否有 installation_id 参数（从 GitHub 回调）
+  // 检查 URL 中是否有 installation_id 参数（从 GitHub 回调，用于新窗口关闭后的情况）
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const installationId = params.get('installation_id');
@@ -118,25 +220,36 @@ export default function SetupPage() {
     }
   }, [sessionStatus, checkInstallation, router]);
 
-  // 如果未安装且获取到安装 URL，自动跳转到 GitHub 安装页面
+  // 自动打开 GitHub App 安装窗口
+  // 条件：初始检查完成、用户未安装、有安装 URL、还没有自动打开过、不是从 GitHub 回调回来的
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const installationId = params.get('installation_id');
     
-    // 只有在以下条件满足时才自动跳转：
-    // 1. 不在检查中
-    // 2. 没有已安装
-    // 3. 有安装 URL
-    // 4. 不是从 GitHub 回调回来的（没有 installation_id）
-    // 5. 还没有开始自动跳转
-    if (!isChecking && !hasInstallation && installUrl && !installationId && !autoRedirecting) {
-      setAutoRedirecting(true);
-      // 自动跳转到 GitHub App 安装页面
+    if (
+      !isChecking && 
+      !hasInstallation && 
+      installUrl && 
+      !hasAutoOpened && 
+      !installationId &&
+      !isWaitingForInstall
+    ) {
+      setHasAutoOpened(true);
+      // 短暂延迟后自动打开，让用户有时间看到页面
       setTimeout(() => {
-        window.location.href = installUrl;
-      }, 1000);
+        openInstallWindow();
+      }, 500);
     }
-  }, [isChecking, hasInstallation, installUrl, autoRedirecting]);
+  }, [isChecking, hasInstallation, installUrl, hasAutoOpened, isWaitingForInstall, openInstallWindow]);
+
+  // 组件卸载时清理轮询
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
 
   // Session 加载中
   if (sessionStatus === 'loading') {
@@ -154,8 +267,8 @@ export default function SetupPage() {
     );
   }
 
-  // 检查安装状态中
-  if (isChecking) {
+  // 检查安装状态中（初始加载）
+  if (isChecking && !isWaitingForInstall) {
     return (
       <div className="min-h-screen flex flex-col">
         <Navbar user={session?.user} />
@@ -181,7 +294,7 @@ export default function SetupPage() {
               <CheckCircle2 className="h-16 w-16 text-green-500 mx-auto mb-4" />
               <h2 className="text-2xl font-bold mb-2">设置完成！</h2>
               <p className="text-muted-foreground mb-4">
-                正在跳转到控制台...
+                GitHub App 安装成功，正在跳转到控制台...
               </p>
               <Loader2 className="h-6 w-6 text-primary mx-auto animate-spin" />
             </CardContent>
@@ -192,34 +305,7 @@ export default function SetupPage() {
     );
   }
 
-  // 正在自动跳转到 GitHub
-  if (autoRedirecting) {
-    return (
-      <div className="min-h-screen flex flex-col">
-        <Navbar user={session?.user} />
-        <div className="flex-1 flex items-center justify-center p-4">
-          <Card className="max-w-md text-center">
-            <CardContent className="pt-12 pb-8">
-              <Loader2 className="h-16 w-16 text-primary mx-auto mb-4 animate-spin" />
-              <h2 className="text-2xl font-bold mb-2">正在跳转到 GitHub</h2>
-              <p className="text-muted-foreground mb-4">
-                请在 GitHub 页面完成 App 安装授权...
-              </p>
-              <p className="text-sm text-muted-foreground">
-                如果没有自动跳转，
-                <a href={installUrl} className="text-primary hover:underline">
-                  请点击这里
-                </a>
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-        <Footer />
-      </div>
-    );
-  }
-
-  // 未安装，显示手动安装页面（备用）
+  // 未安装，显示安装页面
   return (
     <div className="min-h-screen flex flex-col">
       <Navbar user={session?.user} />
@@ -232,6 +318,44 @@ export default function SetupPage() {
               安装 GitHub App 以授权访问你的仓库
             </p>
           </div>
+
+          {/* 等待安装中的状态卡片 */}
+          {isWaitingForInstall && (
+            <Card className="mb-8 border-primary/50 bg-primary/5">
+              <CardContent className="pt-6">
+                <div className="flex flex-col items-center text-center">
+                  <div className="relative mb-4">
+                    <Loader2 className="h-12 w-12 text-primary animate-spin" />
+                  </div>
+                  <h3 className="text-lg font-semibold mb-2">等待安装完成...</h3>
+                  <p className="text-muted-foreground mb-4">
+                    请在新打开的窗口中完成 GitHub App 的安装授权
+                  </p>
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <span>正在检查安装状态 ({pollCount} 次)</span>
+                  </div>
+                  <div className="mt-4 flex gap-3">
+                    <Button 
+                      variant="outline" 
+                      size="sm"
+                      onClick={openInstallWindow}
+                    >
+                      <ExternalLink className="mr-2 h-4 w-4" />
+                      重新打开安装窗口
+                    </Button>
+                    <Button 
+                      variant="ghost" 
+                      size="sm"
+                      onClick={stopPolling}
+                    >
+                      取消等待
+                    </Button>
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           <Card className="mb-8">
             <CardHeader>
@@ -274,12 +398,15 @@ export default function SetupPage() {
                 加载中...
               </Button>
             ) : installUrl ? (
-              <a href={installUrl} className="w-full max-w-md">
-                <Button size="lg" className="w-full">
-                  <ExternalLink className="mr-2 h-5 w-5" />
-                  安装 GitHub App
-                </Button>
-              </a>
+              <Button 
+                size="lg" 
+                className="w-full max-w-md"
+                onClick={openInstallWindow}
+                disabled={isWaitingForInstall}
+              >
+                <ExternalLink className="mr-2 h-5 w-5" />
+                {isWaitingForInstall ? '等待安装中...' : '安装 GitHub App'}
+              </Button>
             ) : (
               <div className="w-full max-w-md p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900 rounded-lg">
                 <p className="text-sm text-amber-800 dark:text-amber-200">
@@ -304,7 +431,7 @@ export default function SetupPage() {
               ) : (
                 <>
                   <CheckCircle2 className="mr-2 h-4 w-4" />
-                  重新检查安装状态
+                  手动检查安装状态
                 </>
               )}
             </Button>
