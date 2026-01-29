@@ -70,6 +70,14 @@ export async function getFileTree(
 }
 
 /**
+ * 文件信息接口
+ */
+export interface FileInfo {
+  content: string;
+  sha: string;
+}
+
+/**
  * 获取文件内容
  */
 export async function getFileContent(
@@ -91,6 +99,64 @@ export async function getFileContent(
   }
 
   return Buffer.from(data.content, 'base64').toString('utf-8');
+}
+
+/**
+ * 获取文件内容和 SHA（用于更新文件时）
+ */
+export async function getFileContentWithSha(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  path: string,
+  ref?: string
+): Promise<FileInfo> {
+  const { data } = await octokit.rest.repos.getContent({
+    owner,
+    repo,
+    path,
+    ref,
+  });
+
+  if (Array.isArray(data) || data.type !== 'file') {
+    throw new Error('Path is not a file');
+  }
+
+  return {
+    content: Buffer.from(data.content, 'base64').toString('utf-8'),
+    sha: data.sha,
+  };
+}
+
+/**
+ * 获取文件 SHA（用于更新指定分支上的文件）
+ */
+export async function getFileSha(
+  octokit: Octokit,
+  owner: string,
+  repo: string,
+  path: string,
+  ref?: string
+): Promise<string | null> {
+  try {
+    const { data } = await octokit.rest.repos.getContent({
+      owner,
+      repo,
+      path,
+      ref,
+    });
+
+    if (Array.isArray(data) || data.type !== 'file') {
+      return null;
+    }
+
+    return data.sha;
+  } catch (error: any) {
+    if (error.status === 404) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 /**
