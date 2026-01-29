@@ -8,10 +8,13 @@ import {
   createOrUpdateFile, 
   createPullRequest,
   getFileContent,
+  getFileContentWithSha,
+  getFileSha,
   fileExists
 } from '@/lib/github/operations';
 import { translateWithFallback } from '@/lib/openrouter/fallback';
 import { insertLanguageLinks } from '@/lib/translation/readme-updater';
+import { getTranslatedPath } from '@/lib/translation/filename-translator';
 import { decrypt } from '@/lib/crypto';
 import { TranslationStatus, FileStatus } from '@prisma/client';
 import { FileTreeNode } from '@/types';
@@ -236,14 +239,17 @@ export async function executeTranslation(options: TranslationOptions): Promise<{
 
       for (const targetLang of targetLanguages) {
         try {
-          console.log(`[Translation] Translating ${filePath} to ${targetLang}`);
+          // 计算翻译后的目标路径（基准语言保持原文件名，其他语言翻译为英文）
+          const targetPath = getTranslatedPath(filePath, targetLang, baseLanguage);
+          
+          console.log(`[Translation] Translating ${filePath} to ${targetLang} -> ${targetPath}`);
 
           // 创建翻译文件记录
           const translatedFile = await prisma.translatedFile.create({
             data: {
               translationTaskId: taskId,
               sourcePath: filePath,
-              targetPath: `translations/${targetLang}/${filePath}`,
+              targetPath,
               targetLanguage: targetLang,
               status: FileStatus.TRANSLATING,
               sourceContent,
@@ -259,12 +265,12 @@ export async function executeTranslation(options: TranslationOptions): Promise<{
             aiModel
           );
 
-          // 写入 GitHub
+          // 写入 GitHub（使用翻译后的目标路径）
           await createOrUpdateFile(
             octokit,
             repository.owner,
             repository.name,
-            `translations/${targetLang}/${filePath}`,
+            targetPath,
             translatedContent,
             `[GitHub Global] Translate ${filePath} to ${targetLang}`,
             branchName
@@ -320,7 +326,9 @@ export async function executeTranslation(options: TranslationOptions): Promise<{
     if (hasReadme) {
       try {
         console.log('[Translation] Updating README with language links');
-        const readmeContent = await getFileContent(
+        
+        // 获取 README 内容和 SHA（从基准分支）
+        const readmeInfo = await getFileContentWithSha(
           octokit,
           repository.owner,
           repository.name,
@@ -328,7 +336,21 @@ export async function executeTranslation(options: TranslationOptions): Promise<{
           baseBranch
         );
 
-        const updatedReadme = insertLanguageLinks(readmeContent, targetLanguages);
+        const updatedReadme = insertLanguageLinks(readmeInfo.content, targetLanguages);
+
+        // 检查翻译分支上是否已有 README（可能之前的操作已创建）
+        // 如果有，使用翻译分支上的 SHA；否则使用基准分支的 SHA
+        let readmeSha = readmeInfo.sha;
+        const branchReadmeSha = await getFileSha(
+          octokit,
+          repository.owner,
+          repository.name,
+          readmePath,
+          branchName
+        );
+        if (branchReadmeSha) {
+          readmeSha = branchReadmeSha;
+        }
 
         await createOrUpdateFile(
           octokit,
@@ -337,8 +359,11 @@ export async function executeTranslation(options: TranslationOptions): Promise<{
           readmePath,
           updatedReadme,
           '[GitHub Global] Add language switcher to README',
-          branchName
+          branchName,
+          readmeSha
         );
+        
+        console.log('[Translation] README updated successfully');
       } catch (error) {
         console.error('[Translation] Failed to update README:', error);
       }

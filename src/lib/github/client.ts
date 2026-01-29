@@ -50,9 +50,10 @@ export async function getInstallationOctokit(installationId: number): Promise<Oc
     }
     
     return octokit;
-  } catch (error) {
+  } catch (error: any) {
     console.error('[GitHub] Failed to get installation octokit:', error);
-    throw new Error(`Failed to authenticate with GitHub App: ${(error as Error).message}`);
+    // 保留原始错误，以便调用方可以检查 status
+    throw error;
   }
 }
 

@@ -3,10 +3,26 @@
 import { useState, useEffect, use } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
-import { Globe, ArrowLeft, Settings, Play, GitBranch, Clock, CheckCircle2, FileText, Languages, Loader2, AlertCircle } from "lucide-react";
+import { Navbar, Footer } from "@/components/layout";
+import { 
+  ArrowLeft, 
+  Settings, 
+  Play, 
+  GitBranch, 
+  Clock, 
+  CheckCircle2, 
+  XCircle,
+  FileText, 
+  Languages, 
+  Loader2, 
+  AlertCircle,
+  ExternalLink,
+  RefreshCw
+} from "lucide-react";
 import { SUPPORTED_LANGUAGES } from "@/lib/constants";
 
 // 类型定义
@@ -42,12 +58,20 @@ interface Repository {
 
 export default function RepoDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { data: session, status: sessionStatus } = useSession();
   const router = useRouter();
   const [repo, setRepo] = useState<Repository | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isCreatingTask, setIsCreatingTask] = useState(false);
   const [taskError, setTaskError] = useState<string | null>(null);
+
+  // 检查登录状态
+  useEffect(() => {
+    if (sessionStatus === 'unauthenticated') {
+      router.push('/login');
+    }
+  }, [sessionStatus, router]);
 
   // 加载仓库详情
   const fetchRepo = async () => {
@@ -62,9 +86,12 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
           return;
         }
         if (response.status === 404) {
-          throw new Error('仓库不存在');
+          throw new Error('仓库不存在或已被删除');
         }
-        throw new Error('Failed to fetch repository');
+        if (response.status === 403) {
+          throw new Error('没有权限访问该仓库');
+        }
+        throw new Error('加载仓库详情失败，请稍后重试');
       }
       
       const data = await response.json();
@@ -78,8 +105,20 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
   };
 
   useEffect(() => {
-    fetchRepo();
-  }, [id]);
+    if (sessionStatus === 'authenticated') {
+      fetchRepo();
+    }
+  }, [id, sessionStatus]);
+
+  // 自动刷新运行中的任务
+  useEffect(() => {
+    const hasRunningTask = repo?.translationTasks?.some(t => t.status === 'RUNNING');
+    
+    if (hasRunningTask) {
+      const interval = setInterval(fetchRepo, 5000); // 每5秒刷新
+      return () => clearInterval(interval);
+    }
+  }, [repo?.translationTasks]);
 
   // 创建翻译任务
   const handleCreateTask = async () => {
@@ -107,7 +146,13 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
       const data = await response.json();
       
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to create translation task');
+        if (response.status === 429) {
+          throw new Error('今日翻译次数已达上限，请明天再试或添加您自己的 API Key');
+        }
+        if (response.status === 401) {
+          throw new Error('登录已过期，请重新登录');
+        }
+        throw new Error(data.error || '创建翻译任务失败，请稍后重试');
       }
       
       // 创建成功，刷新页面数据
@@ -120,28 +165,80 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    const styles = {
-      COMPLETED: "bg-green-500/10 text-green-500",
-      RUNNING: "bg-primary/10 text-primary",
-      FAILED: "bg-destructive/10 text-destructive",
-      PENDING: "bg-muted text-muted-foreground",
-    };
-    return styles[status as keyof typeof styles] || styles.PENDING;
+  const getStatusConfig = (status: string) => {
+    switch (status) {
+      case "COMPLETED":
+        return {
+          icon: CheckCircle2,
+          color: "text-green-600",
+          bgColor: "bg-green-500/10",
+          borderColor: "border-green-500/30",
+          progressColor: "bg-green-500",
+          label: "已完成"
+        };
+      case "RUNNING":
+        return {
+          icon: Loader2,
+          color: "text-blue-600",
+          bgColor: "bg-blue-500/10",
+          borderColor: "border-blue-500/30",
+          progressColor: "bg-blue-500",
+          label: "运行中",
+          animate: true
+        };
+      case "FAILED":
+        return {
+          icon: XCircle,
+          color: "text-red-600",
+          bgColor: "bg-red-500/10",
+          borderColor: "border-red-500/30",
+          progressColor: "bg-red-500",
+          label: "失败"
+        };
+      default:
+        return {
+          icon: Clock,
+          color: "text-gray-600",
+          bgColor: "bg-gray-500/10",
+          borderColor: "border-gray-500/30",
+          progressColor: "bg-gray-500",
+          label: "等待中"
+        };
+    }
   };
 
   const getLanguageName = (code: string) => {
     return SUPPORTED_LANGUAGES.find((lang) => lang.code === code)?.name || code;
   };
 
+  // Session 加载中
+  if (sessionStatus === 'loading') {
+    return (
+      <div className="min-h-screen flex flex-col">
+        <Navbar user={null} />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />
+            <p className="text-muted-foreground">加载中...</p>
+          </div>
+        </div>
+        <Footer />
+      </div>
+    );
+  }
+
   // 加载中状态
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />
-          <p className="text-muted-foreground">加载中...</p>
+      <div className="min-h-screen flex flex-col">
+        <Navbar user={session?.user} />
+        <div className="flex-1 flex items-center justify-center">
+          <div className="text-center">
+            <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />
+            <p className="text-muted-foreground">加载中...</p>
+          </div>
         </div>
+        <Footer />
       </div>
     );
   }
@@ -149,17 +246,27 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
   // 错误状态
   if (error || !repo) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Card className="text-center py-12 max-w-md">
-          <CardContent>
-            <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
-            <h3 className="text-lg font-semibold mb-2">加载失败</h3>
-            <p className="text-muted-foreground mb-4">{error || '仓库不存在'}</p>
-            <Link href="/dashboard">
-              <Button>返回控制台</Button>
-            </Link>
-          </CardContent>
-        </Card>
+      <div className="min-h-screen flex flex-col">
+        <Navbar user={session?.user} />
+        <div className="flex-1 flex items-center justify-center p-4">
+          <Card className="text-center py-12 max-w-md w-full">
+            <CardContent>
+              <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
+              <h3 className="text-lg font-semibold mb-2">加载失败</h3>
+              <p className="text-muted-foreground mb-4">{error || '仓库不存在'}</p>
+              <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                <Button onClick={fetchRepo} variant="outline">
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  重试
+                </Button>
+                <Link href="/dashboard">
+                  <Button>返回控制台</Button>
+                </Link>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        <Footer />
       </div>
     );
   }
@@ -168,197 +275,242 @@ export default function RepoDetailPage({ params }: { params: Promise<{ id: strin
   const config = repo.config;
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* 导航栏 */}
-      <nav className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <Globe className="h-6 w-6 text-primary" />
-            <span className="text-xl font-bold">GitHub Global</span>
-          </Link>
-          <div className="flex items-center gap-4">
-            <Link href="/dashboard">
-              <Button variant="ghost">控制台</Button>
-            </Link>
-            <Link href="/settings">
-              <Button variant="ghost">设置</Button>
-            </Link>
-          </div>
-        </div>
-      </nav>
+    <div className="min-h-screen flex flex-col">
+      <Navbar user={session?.user} />
 
-      <div className="container mx-auto px-4 py-8">
-        {/* 返回按钮 */}
-        <Link href="/dashboard">
-          <Button variant="ghost" className="mb-4">
-            <ArrowLeft className="mr-2 h-4 w-4" />
-            返回仓库列表
-          </Button>
-        </Link>
-
-        {/* 仓库信息 */}
-        <div className="mb-8">
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <h1 className="text-3xl font-bold mb-2 flex items-center gap-2">
-                <GitBranch className="h-8 w-8 text-primary" />
-                {repo.fullName}
-              </h1>
-              <p className="text-muted-foreground">{repo.description || '暂无描述'}</p>
-            </div>
-            <Link href={`/repo/${id}/config`}>
-              <Button variant="outline">
-                <Settings className="mr-2 h-4 w-4" />
-                配置
-              </Button>
-            </Link>
-          </div>
-
-          {/* 配置信息卡片 */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">翻译配置</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">基准语言</div>
-                  <div className="font-medium">{getLanguageName(config?.baseLanguage || 'zh-CN')}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">目标语言</div>
-                  <div className="font-medium">
-                    {config?.targetLanguages?.length 
-                      ? config.targetLanguages.map(getLanguageName).join(", ")
-                      : '未配置'}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-sm text-muted-foreground mb-1">默认分支</div>
-                  <div className="font-medium">{repo.defaultBranch}</div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* 操作按钮 */}
-        <div className="mb-8">
-          <div className="flex gap-4 flex-wrap">
-            <Button size="lg" onClick={handleCreateTask} disabled={isCreatingTask}>
-              {isCreatingTask ? (
-                <>
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  创建中...
-                </>
-              ) : (
-                <>
-                  <Play className="mr-2 h-5 w-5" />
-                  开始新翻译
-                </>
-              )}
+      <main className="flex-1">
+        <div className="container mx-auto px-4 py-6 md:py-8">
+          {/* 返回按钮 */}
+          <Link href="/dashboard">
+            <Button variant="ghost" className="mb-4 -ml-2">
+              <ArrowLeft className="mr-2 h-4 w-4" />
+              返回仓库列表
             </Button>
-            <Link href={`/repo/${id}/config`}>
-              <Button size="lg" variant="outline">
-                <Languages className="mr-2 h-5 w-5" />
-                配置翻译选项
-              </Button>
-            </Link>
-          </div>
-          {taskError && (
-            <div className="mt-3 flex items-center gap-2 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4" />
-              {taskError}
+          </Link>
+
+          {/* 仓库信息 */}
+          <div className="mb-6 md:mb-8">
+            <div className="flex flex-col md:flex-row md:items-start justify-between gap-4 mb-4">
+              <div className="flex-1 min-w-0">
+                <h1 className="text-2xl md:text-3xl font-bold mb-2 flex items-center gap-2 flex-wrap">
+                  <GitBranch className="h-7 w-7 md:h-8 md:w-8 text-primary flex-shrink-0" />
+                  <span className="break-all">{repo.fullName}</span>
+                </h1>
+                <p className="text-muted-foreground">{repo.description || '暂无描述'}</p>
+              </div>
+              <Link href={`/repo/${id}/config`} className="flex-shrink-0">
+                <Button variant="outline" className="w-full md:w-auto">
+                  <Settings className="mr-2 h-4 w-4" />
+                  配置
+                </Button>
+              </Link>
             </div>
-          )}
-        </div>
 
-        {/* 翻译任务列表 */}
-        <div className="space-y-4">
-          <h2 className="text-2xl font-bold">翻译任务</h2>
-          
-          {tasks.map((task) => (
-            <Card key={task.id} className="hover:border-primary/50 transition-colors">
-              <CardHeader>
-                <div className="flex items-start justify-between">
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-2">
-                      <CardTitle className="text-lg">
-                        {task.type === "FULL" ? "全量翻译" : "增量翻译"}
-                      </CardTitle>
-                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${getStatusBadge(task.status)}`}>
-                        {task.status === "COMPLETED" && "已完成"}
-                        {task.status === "RUNNING" && "运行中"}
-                        {task.status === "FAILED" && "失败"}
-                        {task.status === "PENDING" && "等待中"}
-                      </span>
-                    </div>
-                    <CardDescription>
-                      目标语言: {(task.targetLanguages as string[]).map(getLanguageName).join(", ")}
-                    </CardDescription>
-                  </div>
-                  {task.pullRequestUrl && (
-                    <a href={task.pullRequestUrl} target="_blank" rel="noopener noreferrer">
-                      <Button variant="outline" size="sm">
-                        查看 PR
-                      </Button>
-                    </a>
-                  )}
-                </div>
+            {/* 配置信息卡片 */}
+            <Card>
+              <CardHeader className="pb-4">
+                <CardTitle className="text-lg">翻译配置</CardTitle>
               </CardHeader>
-              <CardContent className="space-y-4">
-                {/* 进度条 */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-muted-foreground">翻译进度</span>
-                    <span className="font-medium">{task.progress}%</span>
-                  </div>
-                  <Progress value={task.progress} />
-                </div>
-
-                {/* 统计信息 */}
-                <div className="grid grid-cols-3 gap-4 text-sm">
-                  <div className="flex items-center gap-2">
-                    <FileText className="h-4 w-4 text-muted-foreground" />
-                    <div>
-                      <div className="text-muted-foreground">总文件数</div>
-                      <div className="font-medium">{task.totalFiles}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-4 w-4 text-green-500" />
-                    <div>
-                      <div className="text-muted-foreground">已完成</div>
-                      <div className="font-medium">{task.completedFiles}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-muted-foreground" />
-                    <div>
-                      <div className="text-muted-foreground">创建时间</div>
-                      <div className="font-medium">
-                        {new Date(task.createdAt).toLocaleDateString("zh-CN")}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-
-          {tasks.length === 0 && (
-            <Card className="text-center py-12">
               <CardContent>
-                <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="text-lg font-semibold mb-2">还没有翻译任务</h3>
-                <p className="text-muted-foreground mb-4">
-                  点击上方按钮创建第一个翻译任务
-                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  <div>
+                    <div className="text-sm text-muted-foreground mb-1">基准语言</div>
+                    <div className="font-medium">{getLanguageName(config?.baseLanguage || 'zh-CN')}</div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-muted-foreground mb-1">目标语言</div>
+                    <div className="font-medium">
+                      {config?.targetLanguages?.length 
+                        ? config.targetLanguages.map(getLanguageName).join(", ")
+                        : <span className="text-amber-600">未配置</span>}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-sm text-muted-foreground mb-1">默认分支</div>
+                    <div className="font-medium">{repo.defaultBranch}</div>
+                  </div>
+                </div>
               </CardContent>
             </Card>
-          )}
+          </div>
+
+          {/* 操作按钮 */}
+          <div className="mb-6 md:mb-8">
+            <div className="flex flex-col sm:flex-row gap-3">
+              <Button 
+                size="lg" 
+                onClick={handleCreateTask} 
+                disabled={isCreatingTask || !config?.targetLanguages?.length}
+                className="w-full sm:w-auto"
+              >
+                {isCreatingTask ? (
+                  <>
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    创建中...
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-2 h-5 w-5" />
+                    开始新翻译
+                  </>
+                )}
+              </Button>
+              <Link href={`/repo/${id}/config`} className="w-full sm:w-auto">
+                <Button size="lg" variant="outline" className="w-full">
+                  <Languages className="mr-2 h-5 w-5" />
+                  配置翻译选项
+                </Button>
+              </Link>
+            </div>
+            {taskError && (
+              <div className="mt-3 flex items-start gap-2 p-3 rounded-lg bg-destructive/10 border border-destructive/20">
+                <AlertCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-destructive">{taskError}</p>
+              </div>
+            )}
+            {!config?.targetLanguages?.length && (
+              <p className="mt-3 text-sm text-amber-600 flex items-center gap-2">
+                <AlertCircle className="h-4 w-4" />
+                请先配置目标翻译语言
+              </p>
+            )}
+          </div>
+
+          {/* 翻译任务列表 */}
+          <div className="space-y-4 md:space-y-6">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl md:text-2xl font-bold">翻译任务</h2>
+              {tasks.length > 0 && (
+                <Button variant="ghost" size="sm" onClick={fetchRepo}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  刷新
+                </Button>
+              )}
+            </div>
+            
+            {/* 任务卡片 - 响应式网格 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 md:gap-6">
+              {tasks.map((task) => {
+                const statusConfig = getStatusConfig(task.status);
+                const StatusIcon = statusConfig.icon;
+                
+                return (
+                  <Card 
+                    key={task.id} 
+                    className={`transition-all hover:shadow-md ${statusConfig.borderColor} border-2`}
+                  >
+                    <CardHeader className="pb-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <CardTitle className="text-base md:text-lg">
+                              {task.type === "FULL" ? "全量翻译" : "增量翻译"}
+                            </CardTitle>
+                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${statusConfig.bgColor} ${statusConfig.color}`}>
+                              <StatusIcon className={`h-3.5 w-3.5 ${statusConfig.animate ? 'animate-spin' : ''}`} />
+                              {statusConfig.label}
+                            </span>
+                          </div>
+                          <CardDescription className="mt-1.5 text-sm">
+                            {(task.targetLanguages as string[]).map(getLanguageName).join(", ")}
+                          </CardDescription>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      {/* 进度条 - 更明显的样式 */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="text-muted-foreground">翻译进度</span>
+                          <span className={`font-bold ${statusConfig.color}`}>
+                            {Math.round(task.progress)}%
+                          </span>
+                        </div>
+                        <div className="relative">
+                          <Progress 
+                            value={task.progress} 
+                            className="h-3"
+                          />
+                          {task.status === 'RUNNING' && (
+                            <div className="absolute inset-0 overflow-hidden rounded-full">
+                              <div className="h-full w-full bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse" />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 统计信息 */}
+                      <div className="grid grid-cols-3 gap-2 text-sm">
+                        <div className="text-center p-2 rounded-lg bg-muted/50">
+                          <div className="text-lg font-bold">{task.totalFiles}</div>
+                          <div className="text-xs text-muted-foreground">总文件</div>
+                        </div>
+                        <div className="text-center p-2 rounded-lg bg-green-500/10">
+                          <div className="text-lg font-bold text-green-600">{task.completedFiles}</div>
+                          <div className="text-xs text-muted-foreground">已完成</div>
+                        </div>
+                        <div className="text-center p-2 rounded-lg bg-red-500/10">
+                          <div className="text-lg font-bold text-red-600">{task.failedFiles}</div>
+                          <div className="text-xs text-muted-foreground">失败</div>
+                        </div>
+                      </div>
+
+                      {/* 时间和操作 */}
+                      <div className="flex items-center justify-between pt-2 border-t">
+                        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <Clock className="h-3.5 w-3.5" />
+                          {new Date(task.createdAt).toLocaleString("zh-CN", {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </div>
+                        {task.pullRequestUrl && (
+                          <a 
+                            href={task.pullRequestUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer"
+                          >
+                            <Button variant="outline" size="sm" className="h-8">
+                              <ExternalLink className="mr-1.5 h-3.5 w-3.5" />
+                              查看 PR
+                            </Button>
+                          </a>
+                        )}
+                      </div>
+
+                      {/* 失败任务的错误提示 */}
+                      {task.status === 'FAILED' && (
+                        <div className="p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+                          <p className="text-xs text-red-600 flex items-center gap-1.5">
+                            <XCircle className="h-3.5 w-3.5 flex-shrink-0" />
+                            翻译任务执行失败，请检查配置后重试
+                          </p>
+                        </div>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+
+            {tasks.length === 0 && (
+              <Card className="text-center py-12">
+                <CardContent>
+                  <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                  <h3 className="text-lg font-semibold mb-2">还没有翻译任务</h3>
+                  <p className="text-muted-foreground mb-4">
+                    配置好翻译语言后，点击上方按钮创建第一个翻译任务
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </div>
-      </div>
+      </main>
+
+      <Footer />
     </div>
   );
 }
