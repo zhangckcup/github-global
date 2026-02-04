@@ -55,11 +55,11 @@ export const SUPPORTED_AI_MODELS: AIModel[] = [
 ];
 
 // 默认 AI 模型
-export const DEFAULT_AI_MODEL = 'anthropic/claude-3.5-sonnet';
+export const DEFAULT_AI_MODEL = 'qwen/qwen-turbo';
 
 // 模型优先级（用于 fallback）
 export const MODEL_PRIORITY = [
-  'anthropic/claude-3.5-sonnet',
+  'qwen/qwen-turbo',
   'openai/gpt-4o',
   'google/gemini-pro-1.5',
   'anthropic/claude-3-haiku',
