@@ -49,4 +49,5 @@ export interface UpdateRepoConfigRequest {
   includePaths?: string[];
   excludePaths?: string[];
   aiModel?: string;
+  autoTranslate?: boolean;  // 是否启用自动翻译
 }
