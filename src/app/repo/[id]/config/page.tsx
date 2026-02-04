@@ -7,7 +7,7 @@ import { useSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Navbar, Footer } from "@/components/layout";
-import { ArrowLeft, Save, Languages, FolderTree, Loader2, AlertCircle, CheckCircle2, RefreshCw, ChevronRight, ChevronDown, FileText, Sparkles, Check, ExternalLink } from "lucide-react";
+import { ArrowLeft, Save, Languages, FolderTree, Loader2, AlertCircle, CheckCircle2, RefreshCw, ChevronRight, ChevronDown, FileText, Sparkles, Check, ExternalLink, Zap } from "lucide-react";
 import { SUPPORTED_LANGUAGES, SUPPORTED_AI_MODELS, DEFAULT_AI_MODEL } from "@/lib/constants";
 
 // 文件树节点类型
@@ -39,6 +39,8 @@ export default function RepoConfigPage({ params }: { params: Promise<{ id: strin
   const [fileTree, setFileTree] = useState<FileNode[]>([]);
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [aiModel, setAiModel] = useState<string | null>(null);  // null 表示使用默认设置
+  const [autoTranslate, setAutoTranslate] = useState(false);  // 是否启用自动翻译
+  const [isTogglingAuto, setIsTogglingAuto] = useState(false);  // 自动翻译开关切换中
 
   // 检查登录状态
   useEffect(() => {
@@ -82,6 +84,7 @@ export default function RepoConfigPage({ params }: { params: Promise<{ id: strin
           setTargetLanguages(config.targetLanguages || []);
           setSelectedFiles(config.includePaths || []);
           setAiModel(config.aiModel || null);
+          setAutoTranslate(config.autoTranslate || false);
         }
 
         if (filesRes.ok) {
@@ -213,6 +216,7 @@ export default function RepoConfigPage({ params }: { params: Promise<{ id: strin
           targetLanguages,
           includePaths: selectedFiles,
           aiModel: aiModel,
+          autoTranslate,
         }),
       });
       
@@ -630,6 +634,66 @@ export default function RepoConfigPage({ params }: { params: Promise<{ id: strin
             </CardContent>
           </Card>
 
+          {/* 自动翻译配置 */}
+          <Card className="mt-4 md:mt-6">
+            <CardHeader className="pb-4">
+              <CardTitle className="flex items-center gap-2 text-lg md:text-xl">
+                <Zap className="h-5 w-5" />
+                自动翻译
+              </CardTitle>
+              <CardDescription>
+                开启后，当你推送代码到 GitHub 时，系统会自动检测变更的文档并触发翻译
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                <div className="flex items-center justify-between p-4 rounded-lg border">
+                  <div className="space-y-1">
+                    <div className="font-medium">启用自动翻译</div>
+                    <div className="text-sm text-muted-foreground">
+                      当基准语言的 Markdown 文档发生变更时，自动创建翻译任务
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={autoTranslate}
+                    disabled={isTogglingAuto}
+                    onClick={() => setAutoTranslate(!autoTranslate)}
+                    className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                      autoTranslate ? 'bg-primary' : 'bg-gray-200 dark:bg-gray-700'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out ${
+                        autoTranslate ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+                
+                {autoTranslate && (
+                  <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg space-y-2">
+                    <div className="flex items-start gap-2">
+                      <CheckCircle2 className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="text-sm font-medium">自动翻译已启用</p>
+                        <p className="text-xs text-muted-foreground">
+                          系统会自动为此仓库创建 Webhook，监听代码推送事件。当检测到翻译范围内的文档变更时，将自动触发增量翻译任务。
+                        </p>
+                      </div>
+                    </div>
+                    <div className="text-xs text-muted-foreground pl-7 space-y-1">
+                      <p>• 仅翻译基准语言的 Markdown 文件变更</p>
+                      <p>• 遵循上方配置的翻译范围</p>
+                      <p>• 翻译结果会自动创建 Pull Request</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
           {/* 保存按钮 */}
           <div className="mt-6 md:mt-8 flex flex-col sm:flex-row justify-end gap-3">
             <Link href={`/repo/${id}`} className="w-full sm:w-auto">
@@ -715,6 +779,19 @@ export default function RepoConfigPage({ params }: { params: Promise<{ id: strin
                     ? SUPPORTED_AI_MODELS.find(m => m.id === aiModel)?.name || aiModel
                     : <span className="text-muted-foreground">使用默认设置</span>
                   }
+                </div>
+              </div>
+              <div>
+                <div className="text-sm text-muted-foreground mb-1">自动翻译</div>
+                <div className="font-medium">
+                  {autoTranslate ? (
+                    <span className="text-green-600 flex items-center gap-1">
+                      <Zap className="h-4 w-4" />
+                      已启用
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">未启用</span>
+                  )}
                 </div>
               </div>
             </CardContent>
